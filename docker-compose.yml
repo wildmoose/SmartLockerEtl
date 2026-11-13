@@ -1,0 +1,14 @@
+services:
+  case-api:
+    image: ghcr.io/tlau-lb-dk/lb-case-api
+    environment:
+      PORT: "8080"
+    ports:
+      - "127.0.0.1:${CASE_API_PORT:-18080}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped

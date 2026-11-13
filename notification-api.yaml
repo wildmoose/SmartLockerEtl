@@ -1,0 +1,97 @@
+openapi: 3.0.3
+info:
+  title: Recipient Notification Service API
+  version: 1.0.0
+  description: |
+    api for sending sms or email to a recipient.
+servers:
+  - url: http://localhost:18080/api/v1
+    description: Local Docker mock service implementing phase3
+
+paths:
+  /notifications:
+    post:
+      summary: Dispatch locker pickup notification to recipient
+      operationId: sendNotification
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NotificationRequest'
+      responses:
+        '201':
+          description: Notification dispatched
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationResponse'
+        '400':
+          description: Bad request (missing required fields)
+        '422':
+          description: Cannot deliver (e.g. SMS requested but phone number missing)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  schemas:
+    NotificationRequest:
+      type: object
+      required:
+        - recipient_id
+        - parcel_id
+        - locker_id
+        - channel
+      properties:
+        recipient_id:
+          type: string
+          example: "RCP-001"
+        parcel_id:
+          type: string
+          example: "PARCEL-001"
+        locker_id:
+          type: string
+          example: "LOCKER-CPH-01"
+        pin_code:
+          type: string
+          nullable: true
+          description: |
+            PIN code for the locker compartment
+        channel:
+          type: string
+          enum: [SMS, EMAIL]
+          description: send email or sms
+        text_body:
+          type: string
+
+    NotificationResponse:
+      type: object
+      properties:
+        notification_id:
+          type: string
+          example: "NTF-88219"
+        recipient_id:
+          type: string
+          example: "RCP-001"
+        parcel_id:
+          type: string
+          example: "PARCEL-001"
+        delivered_channel:
+          type: string
+          enum: [SMS, EMAIL]
+          example: "SMS"
+        dispatched_at:
+          type: string
+          format: date-time
+
+    ErrorResponse:
+      type: object
+      properties:
+        code:
+          type: string
+          example: "UNDELIVERABLE"
+        message:
+          type: string
+          example: "Recipient has no phone number on record for SMS channel."

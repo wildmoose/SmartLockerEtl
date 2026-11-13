@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="LockerEtl.Tests/LockerEtl.Tests.csproj" />
+  <Project Path="LockerEtl/LockerEtl.csproj" />
+</Solution>

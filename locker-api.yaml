@@ -1,0 +1,261 @@
+openapi: 3.0.3
+info:
+  title: Smart Locker Hardware & Compartment API
+  version: 1.0.0
+  description: |
+    API for managing delivery company smart lockers, querying real-time compartment hardware sensors,
+    allocating compartments for incoming parcels, and releasing compartments after pickup or return.
+servers:
+  - url: http://localhost:18080/api/v1
+    description: Local Docker mock service implementing phase3
+
+paths:
+  /lockers:
+    get:
+      summary: List all locker stations
+      operationId: listLockers
+      responses:
+        '200':
+          description: List of locker stations and basic capacity
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/LockerStation'
+
+  /lockers/{locker_id}/compartments:
+    get:
+      summary: Query compartment status and physical sensors for a locker
+      operationId: getCompartments
+      parameters:
+        - name: locker_id
+          in: path
+          required: true
+          schema:
+            type: string
+            example: "LOCKER-CPH-01"
+      responses:
+        '200':
+          description: Real-time status of all compartments in this locker
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CompartmentStatus'
+        '404':
+          description: Locker not found
+
+  /lockers/{locker_id}/compartments/{compartment_id}:
+    get:
+      summary: Query single compartment sensor state
+      operationId: getCompartmentById
+      parameters:
+        - name: locker_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: compartment_id
+          in: path
+          required: true
+          schema:
+            type: string
+            example: "C01"
+      responses:
+        '200':
+          description: Specific compartment status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompartmentStatus'
+        '404':
+          description: Locker or compartment not found
+
+  /lockers/{locker_id}/allocations:
+    post:
+      summary: Allocate a compartment with a client-supplied recipient PIN
+      operationId: allocateCompartment
+      parameters:
+        - name: locker_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AllocationRequest'
+      responses:
+        '201':
+          description: Compartment successfully reserved; client-supplied PIN echoed unchanged
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AllocationResponse'
+        '409':
+          description: No matching compartment available (locker capacity full or size unavailable)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /lockers/{locker_id}/compartments/{compartment_id}/release:
+    post:
+      summary: Release/clear a compartment after pickup or courier return
+      operationId: releaseCompartment
+      parameters:
+        - name: locker_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: compartment_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReleaseRequest'
+      responses:
+        '200':
+          description: Compartment successfully released and marked available
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompartmentStatus'
+        '400':
+          description: Invalid release reason or state
+
+components:
+  schemas:
+    LockerStation:
+      type: object
+      properties:
+        locker_id:
+          type: string
+          example: "LOCKER-CPH-01"
+        name:
+          type: string
+          example: "Nørrebro Supermarket Station"
+        address:
+          type: string
+          example: "Nørrebrogade 100, 2200 København N"
+        total_compartments:
+          type: integer
+          example: 5
+
+    CompartmentStatus:
+      type: object
+      properties:
+        compartment_id:
+          type: string
+          example: "C01"
+        size:
+          type: string
+          enum: [S, M, L]
+          example: "S"
+        occupancy_status:
+          type: string
+          enum: [AVAILABLE, RESERVED, OCCUPIED, OUT_OF_SERVICE]
+          example: "OCCUPIED"
+        door_state:
+          type: string
+          enum: [CLOSED, OPEN, DOOR_NOT_CLOSED]
+          description: Physical door sensor reading
+          example: "DOOR_NOT_CLOSED"
+        sensor_status:
+          type: string
+          enum: [EMPTY, PARCEL_PRESENT, PARCEL_PICKED_UP]
+          description: Optical/weight shelf sensor reading
+          example: "PARCEL_PICKED_UP"
+        current_parcel_id:
+          type: string
+          nullable: true
+          example: "PARCEL-002"
+        allocated_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    AllocationRequest:
+      type: object
+      required:
+        - parcel_id
+        - size_required
+        - recipient_id
+      properties:
+        parcel_id:
+          type: string
+          example: "PARCEL-001"
+        size_required:
+          type: string
+          enum: [S, M, L]
+          example: "S"
+        recipient_id:
+          type: string
+          example: "RCP-001"
+        pin_code:
+          type: string
+          nullable: true
+          example: "pickup-0042"
+          description: |
+            Optional opaque PIN generated by the client application. Any string is accepted,
+            including empty and whitespace-only strings, with no length or format restrictions.
+            Values are preserved verbatim. Omitted and null values are also accepted;
+            the API does not generate a fallback PIN. Send the same value to the Notification API.
+
+    AllocationResponse:
+      type: object
+      properties:
+        allocation_id:
+          type: string
+          example: "ALC-98214"
+        locker_id:
+          type: string
+          example: "LOCKER-CPH-01"
+        compartment_id:
+          type: string
+          example: "C01"
+        pin_code:
+          type: string
+          nullable: true
+          example: "pickup-0042"
+          description: Client-supplied PIN echoed verbatim, or null when the request PIN was omitted or null.
+        allocated_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+
+    ReleaseRequest:
+      type: object
+      required:
+        - parcel_id
+        - reason
+      properties:
+        parcel_id:
+          type: string
+          example: "PARCEL-001"
+        reason:
+          type: string
+          enum: [CUSTOMER_PICKED_UP, EXPIRED_RETURNED_TO_DEPOT, MAINTENANCE_OVERRIDE]
+          example: "CUSTOMER_PICKED_UP"
+
+    ErrorResponse:
+      type: object
+      properties:
+        code:
+          type: string
+          example: "CAPACITY_FULL"
+        message:
+          type: string
+          example: "No available compartment matching requested size L in LOCKER-CPH-01"

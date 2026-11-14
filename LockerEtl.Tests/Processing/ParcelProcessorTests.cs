@@ -15,12 +15,21 @@ namespace LockerEtl.Tests.Processing
             public List<CompartmentStatus> Compartments { get; } = [];
             public bool HasCapacity { get; set; } = true;
             public List<AllocationRequest> Allocations { get; } = [];
+            public int CompartmentRequests { get; private set; }
+            public Exception? AllocateException { get; set; }
+            public CancellationTokenSource? CancelWhenAllocating { get; set; }
 
-            public Task<IReadOnlyList<CompartmentStatus>> GetCompartmentsAsync(string lockerId, CancellationToken ct) =>
-                Task.FromResult<IReadOnlyList<CompartmentStatus>>(Compartments);
+            public Task<IReadOnlyList<CompartmentStatus>> GetCompartmentsAsync(string lockerId, CancellationToken ct)
+            {
+                CompartmentRequests++;
+                return Task.FromResult<IReadOnlyList<CompartmentStatus>>(Compartments);
+            }
 
             public Task<AllocationResponse?> AllocateAsync(string lockerId, AllocationRequest request, CancellationToken ct)
             {
+                CancelWhenAllocating?.Cancel(); // Simulates Ctrl+C while a parcel is in progress.
+                if (AllocateException is not null && request.ParcelId == "P-1") throw AllocateException;
+
                 Allocations.Add(request);
                 return Task.FromResult(HasCapacity
                     ? new AllocationResponse { AllocationId = "A-1", LockerId = lockerId, CompartmentId = "C01", PinCode = request.PinCode }
@@ -45,9 +54,9 @@ namespace LockerEtl.Tests.Processing
             public string Generate() => "123456";
         }
 
-        private static ParcelState Parcel(string? phone = "+4520123456", string? email = "a@example.dk") => new()
+        private static ParcelState Parcel(string? phone = "+4520123456", string? email = "a@example.dk", string id = "P-1") => new()
         {
-            ParcelId = "P-1",
+            ParcelId = id,
             RecipientId = "R-1",
             Size = ParcelSize.S,
             TargetLockerId = "L-1",
@@ -129,6 +138,81 @@ namespace LockerEtl.Tests.Processing
             var outcome = Assert.Single(await Processor(new FakeLockers(), notifications).ProcessAsync([Parcel()], CancellationToken.None));
 
             Assert.Equal(ParcelOutcomeStatus.NotificationFailed, outcome.Status);
+        }
+
+        [Fact]
+        public async Task Process_HttpFailure_IsReportedAsErrorAndBatchContinues()
+        {
+            var lockers = new FakeLockers { AllocateException = new HttpRequestException("500") };
+
+            var outcomes = await Processor(lockers, new FakeNotifications())
+                .ProcessAsync([Parcel(id: "P-1"), Parcel(id: "P-2")], CancellationToken.None);
+
+            Assert.Equal(ParcelOutcomeStatus.Error, outcomes[0].Status);
+            Assert.Equal("L-1", outcomes[0].LockerId);
+            Assert.Equal(ParcelOutcomeStatus.Delivered, outcomes[1].Status);
+        }
+
+        [Fact]
+        public async Task Process_HttpTimeout_IsReportedAsError()
+        {
+            // HttpClient reports a timeout as TaskCanceledException even though nobody pressed Ctrl+C.
+            var lockers = new FakeLockers { AllocateException = new TaskCanceledException("timeout") };
+
+            var outcome = Assert.Single(await Processor(lockers, new FakeNotifications()).ProcessAsync([Parcel()], CancellationToken.None));
+
+            Assert.Equal(ParcelOutcomeStatus.Error, outcome.Status);
+        }
+
+        [Fact]
+        public async Task Process_UnexpectedException_IsNotHidden()
+        {
+            var lockers = new FakeLockers { AllocateException = new InvalidOperationException("bug") };
+
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                Processor(lockers, new FakeNotifications()).ProcessAsync([Parcel()], CancellationToken.None));
+        }
+
+        [Fact]
+        public async Task Process_CancelledBeforeStart_TouchesNothing()
+        {
+            var lockers = new FakeLockers();
+            using var cts = new CancellationTokenSource();
+            cts.Cancel();
+
+            var outcomes = await Processor(lockers, new FakeNotifications()).ProcessAsync([Parcel()], cts.Token);
+
+            Assert.Empty(outcomes);
+            Assert.Empty(lockers.Allocations);
+        }
+
+        [Fact]
+        public async Task Process_CancelledDuringParcel_FinishesThatParcelAndStops()
+        {
+            using var cts = new CancellationTokenSource();
+            var lockers = new FakeLockers { CancelWhenAllocating = cts };
+            var notifications = new FakeNotifications();
+
+            var outcomes = await Processor(lockers, notifications)
+                .ProcessAsync([Parcel(id: "P-1"), Parcel(id: "P-2")], cts.Token);
+
+            // P-1 is allocated AND notified; P-2 is never started.
+            var outcome = Assert.Single(outcomes);
+            Assert.Equal(ParcelOutcomeStatus.Delivered, outcome.Status);
+            Assert.Single(lockers.Allocations);
+            Assert.Single(notifications.Sent);
+        }
+
+        [Fact]
+        public async Task Process_SeveralParcelsInSameLocker_ReadsCompartmentsOnce()
+        {
+            var lockers = new FakeLockers();
+
+            await Processor(lockers, new FakeNotifications())
+                .ProcessAsync([Parcel(id: "P-1"), Parcel(id: "P-2"), Parcel(id: "P-3")], CancellationToken.None);
+
+            Assert.Equal(1, lockers.CompartmentRequests);
+            Assert.Equal(3, lockers.Allocations.Count);
         }
     }
 }

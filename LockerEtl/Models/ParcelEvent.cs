@@ -11,7 +11,7 @@ namespace LockerEtl.Models
     /// the same event twice with different event ids (e.g. EVT-1047 and EVT-1048), and those
     /// must be treated as duplicates.
     /// </remarks>
-    public sealed class ParcelEvent : IEquatable<ParcelEvent>
+    public class ParcelEvent : IEquatable<ParcelEvent>
     {
         public required string EventId { get; init; }
         public required DateTimeOffset Timestamp { get; init; }
@@ -31,6 +31,8 @@ namespace LockerEtl.Models
         {
             if (other is null) return false;
             if (ReferenceEquals(this, other)) return true;
+            // The class is not sealed, so a subclass instance must never equal a plain ParcelEvent.
+            if (GetType() != other.GetType()) return false;
 
             return Timestamp == other.Timestamp
                 && string.Equals(ParcelId, other.ParcelId, StringComparison.Ordinal)

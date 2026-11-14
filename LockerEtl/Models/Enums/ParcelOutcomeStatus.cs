@@ -6,7 +6,6 @@ namespace LockerEtl.Models.Enums
     {
         Delivered,
         AlreadyAllocated,
-        Rejected,
         NoCapacity,
         NotificationFailed,
         Error

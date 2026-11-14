@@ -32,7 +32,7 @@ namespace LockerEtl.Processing
         public async Task<EtlReport> RunAsync(CancellationToken ct)
         {
             ReadResult read;
-            using (var file = File.OpenText(_data.Path))
+            using (var file = File.OpenText(_data.ResolvePath(AppContext.BaseDirectory)))
             {
                 read = _reader.Read(file);
             }
@@ -48,7 +48,8 @@ namespace LockerEtl.Processing
                 DuplicatesRemoved = consolidated.DuplicatesRemoved,
                 ParcelCount = consolidated.Parcels.Count,
                 Rejected = validated.Rejected,
-                Outcomes = outcomes
+                Outcomes = outcomes,
+                Cancelled = ct.IsCancellationRequested
             };
         }
     }

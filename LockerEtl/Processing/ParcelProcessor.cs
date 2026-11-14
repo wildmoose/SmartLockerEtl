@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Text.Json;
 using LockerEtl.Api;
 using LockerEtl.Api.Models;
 using LockerEtl.Models;
@@ -33,33 +34,65 @@ namespace LockerEtl.Processing
             _logger = logger;
         }
 
+        /// <summary>
+        /// Processes parcels one at a time. Cancellation is checked between parcels only:
+        /// the parcel in progress is always finished, so a compartment is never allocated
+        /// without a notification attempt. Parcels not reached are left untouched and a
+        /// rerun picks them up.
+        /// </summary>
         public async Task<IReadOnlyList<ParcelOutcome>> ProcessAsync(IEnumerable<ParcelState> parcels, CancellationToken ct)
         {
             var outcomes = new List<ParcelOutcome>();
 
+            // One snapshot of each locker per run. Each parcel id appears only once in a run,
+            // so allocations made during this run cannot change the answer to "is this parcel already placed?".
+            var compartmentsByLocker = new Dictionary<string, IReadOnlyList<CompartmentStatus>>();
+
             foreach (var parcel in parcels)
             {
+                if (ct.IsCancellationRequested)
+                {
+                    _logger.LogWarning("Cancelled: {Processed} parcels processed, the rest were not touched", outcomes.Count);
+                    break;
+                }
+
                 try
                 {
-                    outcomes.Add(await ProcessOneAsync(parcel, ct));
+                    outcomes.Add(await ProcessOneAsync(parcel, compartmentsByLocker, CancellationToken.None));
                 }
-                catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException && !ct.IsCancellationRequested)
+                catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
                 {
-                    // Transport or server errors: log, record, move on to the next parcel.
-                    _logger.LogError(ex, "Failed to process {ParcelId}", parcel.ParcelId);
-                    outcomes.Add(new ParcelOutcome { ParcelId = parcel.ParcelId, Status = ParcelOutcomeStatus.Error, Detail = ex.Message });
+                    // Transport errors, HTTP timeouts (TaskCanceledException) and unreadable responses:
+                    // record the parcel as failed and move on. Programming errors are not caught here.
+                    _logger.LogError("Failed to process {ParcelId}: {Error}", parcel.ParcelId, ex.Message);
+                    _logger.LogDebug(ex, "Details for {ParcelId}", parcel.ParcelId);
+                    outcomes.Add(new ParcelOutcome
+                    {
+                        ParcelId = parcel.ParcelId,
+                        Status = ParcelOutcomeStatus.Error,
+                        LockerId = parcel.TargetLockerId,
+                        Detail = ex.Message
+                    });
                 }
             }
 
             return outcomes;
         }
 
-        private async Task<ParcelOutcome> ProcessOneAsync(ParcelState parcel, CancellationToken ct)
+        private async Task<ParcelOutcome> ProcessOneAsync(
+            ParcelState parcel,
+            Dictionary<string, IReadOnlyList<CompartmentStatus>> compartmentsByLocker,
+            CancellationToken ct)
         {
             var lockerId = parcel.TargetLockerId!; // Guaranteed by ParcelValidator.
 
             // 1. Idempotency: skip parcels already placed in this locker by an earlier run.
-            var compartments = await _lockers.GetCompartmentsAsync(lockerId, ct);
+            if (!compartmentsByLocker.TryGetValue(lockerId, out var compartments))
+            {
+                compartments = await _lockers.GetCompartmentsAsync(lockerId, ct);
+                compartmentsByLocker[lockerId] = compartments;
+            }
+
             var existing = compartments.FirstOrDefault(c => c.CurrentParcelId == parcel.ParcelId);
             if (existing is not null)
             {

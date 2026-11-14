@@ -61,6 +61,33 @@ namespace LockerEtl.Tests.Models
         }
 
         [Fact]
+        public void Equals_SubclassWithSameContent_IsNotEqual()
+        {
+            var plain = Event();
+            var derived = new DerivedEvent
+            {
+                EventId = plain.EventId,
+                Timestamp = plain.Timestamp,
+                ParcelId = plain.ParcelId,
+                RecipientId = plain.RecipientId,
+                RecipientName = plain.RecipientName,
+                RecipientPhone = plain.RecipientPhone,
+                RecipientEmail = plain.RecipientEmail,
+                RecipientPostalCode = plain.RecipientPostalCode,
+                RetailerId = plain.RetailerId,
+                TargetLockerId = plain.TargetLockerId,
+                Size = plain.Size
+            };
+
+            Assert.False(plain.Equals(derived));
+            Assert.False(derived.Equals(plain));
+        }
+
+        private class DerivedEvent : ParcelEvent
+        {
+        }
+
+        [Fact]
         public void Distinct_RemovesContentDuplicates()
         {
             var events = new[] { Event("EVT-1047"), Event("EVT-1048"), Event("EVT-1049", size: ParcelSize.S) };

@@ -37,6 +37,61 @@ namespace LockerEtl.Tests.Input
             Assert.Null(e.Size);
         }
 
+        [Fact]
+        public void Read_TimestampWithoutOffset_IsTreatedAsUtc()
+        {
+            var csv = Header + "\n\"EVT-1\";\"2026-10-27T06:00:00\";\"P-1\";\"R-1\";;;;;;;";
+
+            var e = Assert.Single(Reader.Read(new StringReader(csv)).Events);
+
+            Assert.Equal(TimeSpan.Zero, e.Timestamp.Offset);
+            Assert.Equal(new DateTimeOffset(2026, 10, 27, 6, 0, 0, TimeSpan.Zero), e.Timestamp);
+        }
+
+        [Fact]
+        public void Read_SemicolonAndEscapedQuoteInsideQuotedField_AreKept()
+        {
+            var csv = Header + "\n\"EVT-1\";\"2026-10-27T06:00:00Z\";\"P-1\";\"R-1\";\"Hansen; \"\"Mette\"\"\";;;;;;";
+
+            var e = Assert.Single(Reader.Read(new StringReader(csv)).Events);
+
+            Assert.Equal("Hansen; \"Mette\"", e.RecipientName);
+        }
+
+        [Fact]
+        public void Read_BlankLines_AreIgnored()
+        {
+            var csv = $"{Header}\n\n\"EVT-1\";\"2026-10-27T06:00:00Z\";\"P-1\";\"R-1\";;;;;;;\n   \n";
+
+            var result = Reader.Read(new StringReader(csv));
+
+            Assert.Single(result.Events);
+            Assert.Empty(result.Errors);
+        }
+
+        [Fact]
+        public void Read_BadRow_ErrorContainsTheFileLineNumber()
+        {
+            var csv = $"{Header}\n\"EVT-1\";\"2026-10-27T06:00:00Z\";\"P-1\";\"R-1\";;;;;;;\n\"EVT-2\";\"not-a-date\";\"P-2\";\"R-2\";;;;;;;";
+
+            var error = Assert.Single(Reader.Read(new StringReader(csv)).Errors);
+
+            Assert.StartsWith("Line 3:", error);
+        }
+
+        [Theory]
+        [InlineData("\"\";\"2026-10-27T06:00:00Z\";\"P-1\";\"R-1\";;;;;;;")]   // missing event_id
+        [InlineData("\"EVT-1\";\"2026-10-27T06:00:00Z\";;\"R-1\";;;;;;;")]       // missing parcel_id
+        [InlineData("\"EVT-1\";\"2026-10-27T06:00:00Z\";\"P-1\";;;;;;;;")]       // missing recipient_id
+        [InlineData("\"EVT-1\";;\"P-1\";\"R-1\";;;;;;;")]                        // missing timestamp
+        public void Read_MissingRequiredField_IsReported(string badRow)
+        {
+            var result = Reader.Read(new StringReader($"{Header}\n{badRow}"));
+
+            Assert.Empty(result.Events);
+            Assert.Single(result.Errors);
+        }
+
         [Theory]
         [InlineData("\"EVT-1\";\"not-a-date\";\"P-1\";\"R-1\";;;;;;;\"S\"")]
         [InlineData("\"EVT-1\";\"2026-10-27T06:00:00Z\";\"P-1\";\"R-1\";;;;;;;\"XL\"")]
